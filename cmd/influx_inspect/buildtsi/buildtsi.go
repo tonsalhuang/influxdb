@@ -2,8 +2,10 @@
 package buildtsi
 
 import (
+	"errors"
 	"flag"
 	"fmt"
+	"github.com/influxdata/influxdb/pkg/file"
 	"io"
 	"io/ioutil"
 	"os"
@@ -31,13 +33,14 @@ type Command struct {
 	Verbose bool
 	Logger  *zap.Logger
 
-	concurrency     int // Number of goroutines to dedicate to shard index building.
-	databaseFilter  string
-	retentionFilter string
-	shardFilter     string
-	maxLogFileSize  int64
-	maxCacheSize    uint64
-	batchSize       int
+	concurrency       int // Number of goroutines to dedicate to shard index building.
+	databaseFilter    string
+	retentionFilter   string
+	shardFilter       string
+	compactSeriesFile bool
+	maxLogFileSize    int64
+	maxCacheSize      uint64
+	batchSize         int
 }
 
 // NewCommand returns a new instance of Command.
@@ -60,6 +63,7 @@ func (cmd *Command) Run(args ...string) error {
 	fs.StringVar(&cmd.databaseFilter, "database", "", "optional: database name")
 	fs.StringVar(&cmd.retentionFilter, "retention", "", "optional: retention policy")
 	fs.StringVar(&cmd.shardFilter, "shard", "", "optional: shard id")
+	fs.BoolVar(&cmd.compactSeriesFile, "compact-series-file", false, "optional: compact existing series file. Do not rebuilt index.")
 	fs.Int64Var(&cmd.maxLogFileSize, "max-log-file-size", tsdb.DefaultMaxIndexLogFileSize, "optional: maximum log file size")
 	fs.Uint64Var(&cmd.maxCacheSize, "max-cache-size", tsdb.DefaultCacheMaxMemorySize, "optional: maximum cache size")
 	fs.IntVar(&cmd.batchSize, "batch-size", defaultBatchSize, "optional: set the size of the batches we write to the index. Setting this can have adverse affects on performance and heap requirements")
@@ -90,6 +94,14 @@ func (cmd *Command) run(dataDir, walDir string) error {
 		}
 	}
 
+	if cmd.compactSeriesFile {
+		if cmd.retentionFilter != "" {
+			return errors.New("cannot specify retention policy when compacting series file")
+		} else if cmd.shardFilter != "" {
+			return errors.New("cannot specify shard ID when compacting series file")
+		}
+	}
+
 	fis, err := ioutil.ReadDir(dataDir)
 	if err != nil {
 		return err
@@ -103,12 +115,197 @@ func (cmd *Command) run(dataDir, walDir string) error {
 			continue
 		}
 
+		if cmd.compactSeriesFile {
+			if err := cmd.compactDatabaseSeriesFile(name, filepath.Join(dataDir, name)); err != nil {
+				return err
+			}
+			continue
+		}
+
 		if err := cmd.processDatabase(name, filepath.Join(dataDir, name), filepath.Join(walDir, name)); err != nil {
 			return err
 		}
 	}
 
 	return nil
+}
+
+// compactDatabaseSeriesFile compacts the series file segments associated with
+// the series file for the provided database.
+func (cmd *Command) compactDatabaseSeriesFile(dbName, path string) error {
+	sfilePath := filepath.Join(path, tsdb.SeriesFileDirectory)
+	paths, err := cmd.seriesFilePartitionIndexes(sfilePath)
+	if err != nil {
+		return err
+	}
+
+	// Concurrently process each partition in the series file
+	errC := make(chan error, len(paths))
+	var maxi uint32 // index of maximum partition being worked on.
+	for k := 0; k < cmd.concurrency; k++ {
+		go func() {
+			for {
+				i := int(atomic.AddUint32(&maxi, 1) - 1) // Get next partition to work on.
+				if i >= len(paths) {
+					return // No more work.
+				}
+				errC <- cmd.compactSeriesFilePartition(paths[i])
+			}
+		}()
+	}
+
+	for i := 0; i < cap(errC); i++ {
+		if err := <-errC; err != nil {
+			return err
+		}
+	}
+
+	// Build new series file indexes
+	sfile := tsdb.NewSeriesFile(sfilePath)
+	if err = sfile.Open(); err != nil {
+		return err
+	}
+
+	compactor := tsdb.NewSeriesPartitionCompactor()
+	for _, partition := range sfile.Partitions() {
+		if err = compactor.Compact(partition); err != nil {
+			return err
+		}
+		fmt.Println("compacted ", partition.Path())
+	}
+	return nil
+}
+
+func (cmd *Command) compactSeriesFilePartition(indexPath string) error {
+	fmt.Printf("processing partition for %q\n", indexPath)
+	partitionPath := filepath.Dir(indexPath)
+	fis, err := ioutil.ReadDir(partitionPath)
+	if err != nil {
+		return err
+	}
+
+	index := tsdb.NewSeriesIndex(indexPath)
+	if err := index.Open(); err != nil {
+		return err
+	}
+
+	// Cleanup new paths on error
+	var newPaths []string
+	defer func() {
+		for _, path := range newPaths {
+			fmt.Println("cleaning up ", path)
+			os.RemoveAll(path)
+		}
+	}()
+
+	var buf []byte
+	var newSegments []*tsdb.SeriesSegment
+	entries := map[string]uint32{}
+	for _, fi := range fis {
+		segmentID, err := tsdb.ParseSeriesSegmentFilename(fi.Name())
+		if err != nil {
+			continue // skip non-segment file.
+		}
+
+		path := filepath.Join(partitionPath, fi.Name())
+		old := tsdb.NewSeriesSegment(segmentID, path)
+		if err = old.Open(); err != nil {
+			return err
+		}
+		fmt.Printf("processing segment %q %d\n", path, segmentID)
+
+		newPath := fmt.Sprintf("%s.tmp", path)
+		newPaths = append(newPaths, newPath)
+		new, err := tsdb.CreateSeriesSegment(segmentID, newPath)
+		if err != nil {
+			return err
+		}
+
+		if err = new.InitForWrite(); err != nil {
+			return err
+		}
+		newSegments = append(newSegments, new)
+
+		// iterate through the segment and write any entries to a new segment
+		// that exist in the index.
+		if err = old.ForEachEntry(func(flag uint8, id uint64, _ int64, key []byte) error {
+			offset := index.FindOffsetByID(id)
+			if offset == 0 {
+				return nil // series id has been deleted from index
+			}
+
+			if flag == tsdb.SeriesEntryTombstoneFlag {
+				panic(fmt.Sprintf("[series id %d]: tombstone entry but exists in index at offset %d", id, offset))
+			}
+
+			// copy entry over to new segment
+			buf = tsdb.AppendSeriesEntry(buf[:0], flag, id, key)
+			_, err := new.WriteLogEntry(buf)
+			entries[newPath] = entries[newPath] + 1
+			if err != nil {
+				fmt.Println(len(buf), string(buf))
+			}
+			return err
+		}); err != nil {
+			return err
+		}
+
+		if err = old.Close(); err != nil {
+			return err
+		} else if err = new.Close(); err != nil {
+			return err
+		}
+	}
+
+	// remove the old segment files and replace with new ones
+	for _, path := range newPaths {
+		if entries[path] == 0 {
+			continue // nothing in the segment
+		}
+
+		fmt.Printf("renaming new segment %q to %q\n", path, strings.TrimSuffix(path, ".tmp"))
+		if err = file.RenameFile(path, strings.TrimSuffix(path, ".tmp")); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("serious failure. Please rebuild index and series file: %v", err)
+		}
+	}
+
+	if err = index.Close(); err != nil {
+		return err
+	}
+
+	// remove index file and then rebuild index
+	fmt.Println("removing index file", indexPath)
+	if err = os.Remove(indexPath); err != nil && !os.IsNotExist(err) { // index won't exist for low cardinality
+		return err
+	}
+	return nil
+	// fmt.Println("creatring index file", indexPath)
+	// index = tsdb.NewSeriesIndex(indexPath)
+	// if err := index.Open(); err != nil {
+	// return err
+	// }
+	// } else if err = index.Recover(newSegments); err != nil {
+	// 	return err
+	// }
+	// return index.Close()
+}
+
+// seriesFilePartitions returns the paths to each partition in the series file.
+func (cmd *Command) seriesFilePartitionIndexes(path string) ([]string, error) {
+	sfile := tsdb.NewSeriesFile(path)
+	sfile.Logger = cmd.Logger
+	if err := sfile.Open(); err != nil {
+		return nil, err
+	}
+
+	var paths []string
+	for _, partition := range sfile.Partitions() {
+		paths = append(paths, partition.IndexPath())
+	}
+	if err := sfile.Close(); err != nil {
+		return nil, err
+	}
+	return paths, nil
 }
 
 func (cmd *Command) processDatabase(dbName, dataDir, walDir string) error {
