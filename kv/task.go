@@ -6,6 +6,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/influxdata/influxdb/resource"
+
 	"github.com/influxdata/influxdb"
 	icontext "github.com/influxdata/influxdb/context"
 	"github.com/influxdata/influxdb/task/backend"
@@ -30,6 +32,8 @@ var (
 	taskRunBucket   = []byte("taskRunsv1")
 	taskIndexBucket = []byte("taskIndexsv1")
 )
+
+const taskResource = "task"
 
 var _ influxdb.TaskService = (*Service)(nil)
 var _ backend.TaskControlService = (*Service)(nil)
@@ -655,7 +659,15 @@ func (s *Service) createTask(ctx context.Context, tx Tx, tc influxdb.TaskCreate)
 		OrgID:       task.OrganizationID,
 		Permissions: ps,
 	}
-	return task, nil
+
+	return task, s.audit.Log(resource.Change{
+		Type:           resource.Create,
+		ResourceID:     task.ID.String(),
+		ResourceType:   taskResource,
+		OrganizationID: task.OrganizationID.String(),
+		ResourceBody:   taskBytes,
+		Time:           time.Now(),
+	})
 }
 
 func (s *Service) createTaskURM(ctx context.Context, tx Tx, t *influxdb.Task) error {
@@ -790,7 +802,19 @@ func (s *Service) updateTask(ctx context.Context, tx Tx, id influxdb.ID, upd inf
 		return nil, influxdb.ErrInternalTaskServiceError(err)
 	}
 
-	return task, bucket.Put(key, taskBytes)
+	err = bucket.Put(key, taskBytes)
+	if err != nil {
+		return nil, influxdb.ErrUnexpectedTaskBucketErr(err)
+	}
+
+	return task, s.audit.Log(resource.Change{
+		Type:           resource.Update,
+		ResourceID:     task.ID.String(),
+		ResourceType:   taskResource,
+		OrganizationID: task.OrganizationID.String(),
+		ResourceBody:   taskBytes,
+		Time:           time.Now(),
+	})
 }
 
 // DeleteTask removes a task by ID and purges all associated data and scheduled runs.
@@ -883,7 +907,13 @@ func (s *Service) deleteTask(ctx context.Context, tx Tx, id influxdb.ID) error {
 		s.log.Info("Error deleting user resource mapping for task", zap.Stringer("taskID", task.ID), zap.Error(err))
 	}
 
-	return nil
+	return s.audit.Log(resource.Change{
+		Type:           resource.Delete,
+		ResourceID:     task.ID.String(),
+		ResourceType:   taskResource,
+		OrganizationID: task.OrganizationID.String(),
+		Time:           time.Now(),
+	})
 }
 
 // FindLogs returns logs for a run.
