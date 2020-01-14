@@ -11,6 +11,7 @@ import (
 	"github.com/influxdata/influxdb/logger"
 	"github.com/influxdata/influxdb/models"
 	"github.com/influxdata/influxdb/tsdb"
+	"golang.org/x/sync/errgroup"
 )
 
 func TestParseSeriesKeyInto(t *testing.T) {
@@ -171,6 +172,54 @@ func TestSeriesFile_DeleteSeriesID(t *testing.T) {
 		t.Fatal(err)
 	} else if !sfile.IsDeleted(ids0[0]) {
 		t.Fatal("expected deletion after reopen")
+	}
+}
+
+var cachedCompactionSeriesFile *SeriesFile
+
+func BenchmarkSeriesFile_Compaction(b *testing.B) {
+	const n = 1000000
+
+	if cachedCompactionSeriesFile == nil {
+		sfile := MustOpenSeriesFile()
+
+		// Generate a bunch of keys.
+		var ids []uint64
+		for i := 0; i < n; i++ {
+			tmp, err := sfile.CreateSeriesListIfNotExists([][]byte{[]byte("cpu")}, []models.Tags{models.NewTags(map[string]string{"region": fmt.Sprintf("r%d", i)})})
+			if err != nil {
+				b.Fatal(err)
+			}
+			ids = append(ids, tmp...)
+		}
+
+		// Delete a subset of keys.
+		for i := 0; i < len(ids); i += 10 {
+			if err := sfile.DeleteSeriesID(ids[i]); err != nil {
+				b.Fatal(err)
+			}
+		}
+
+		cachedCompactionSeriesFile = sfile
+	}
+
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		// Compact all segments in parallel.
+		var g errgroup.Group
+		for _, p := range cachedCompactionSeriesFile.Partitions() {
+			for _, segment := range p.Segments() {
+				p, segment := p, segment
+				g.Go(func() error {
+					return segment.CompactToPath(segment.Path()+".tmp", p.Index())
+				})
+			}
+		}
+
+		if err := g.Wait(); err != nil {
+			b.Fatal(err)
+		}
 	}
 }
 

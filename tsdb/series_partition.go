@@ -173,8 +173,14 @@ func (p *SeriesPartition) ID() int { return p.id }
 // Path returns the path to the partition.
 func (p *SeriesPartition) Path() string { return p.path }
 
-// Path returns the path to the series index.
+// IndexPath returns the path to the series index.
 func (p *SeriesPartition) IndexPath() string { return filepath.Join(p.path, "index") }
+
+// Index returns the partition's index.
+func (p *SeriesPartition) Index() *SeriesIndex { return p.index }
+
+// Segments returns a list of partition segments. Used for testing.
+func (p *SeriesPartition) Segments() []*SeriesSegment { return p.segments }
 
 // CreateSeriesListIfNotExists creates a list of series in bulk if they don't exist.
 // The ids parameter is modified to contain series IDs for all keys belonging to this partition.
