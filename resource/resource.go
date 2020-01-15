@@ -4,7 +4,11 @@
 // A change includes the creation, update or deletion of a resource.
 package resource
 
-import "time"
+import (
+	"time"
+
+	"github.com/influxdata/influxdb"
+)
 
 // Logger records changes to resources.
 type Logger interface {
@@ -19,7 +23,7 @@ type Change struct {
 	// ResourceID of the changed resource.
 	ResourceID string
 	// ResourceType that was changed.
-	ResourceType string
+	ResourceType influxdb.ResourceType
 	// OrganizationID of the organization owning the changed resource.
 	OrganizationID string
 	// ResourceBody after the change.
