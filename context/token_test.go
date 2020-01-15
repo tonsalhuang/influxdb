@@ -48,7 +48,7 @@ func TestGetUserID(t *testing.T) {
 		t.Errorf("unexpected error while retrieving user ID: %v", err)
 	}
 
-	if want := "5678"; got.String() != want {
+	if want := influxdb.ID(5678); got != want {
 		t.Errorf("GetUserID() want %s, got %s", want, got)
 	}
 }
