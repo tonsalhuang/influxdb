@@ -33,8 +33,6 @@ var (
 	taskIndexBucket = []byte("taskIndexsv1")
 )
 
-const taskResource = "task"
-
 var _ influxdb.TaskService = (*Service)(nil)
 var _ backend.TaskControlService = (*Service)(nil)
 
@@ -660,14 +658,20 @@ func (s *Service) createTask(ctx context.Context, tx Tx, tc influxdb.TaskCreate)
 		Permissions: ps,
 	}
 
-	return task, s.audit.Log(resource.Change{
+	uid, _ := icontext.GetUserID(ctx)
+	if err := s.audit.Log(resource.Change{
 		Type:           resource.Create,
-		ResourceID:     task.ID.String(),
-		ResourceType:   taskResource,
-		OrganizationID: task.OrganizationID.String(),
+		ResourceID:     task.ID,
+		ResourceType:   influxdb.TasksResourceType,
+		OrganizationID: task.OrganizationID,
+		UserID:         uid,
 		ResourceBody:   taskBytes,
 		Time:           time.Now(),
-	})
+	}); err != nil {
+		return nil, err
+	}
+
+	return task, nil
 }
 
 func (s *Service) createTaskURM(ctx context.Context, tx Tx, t *influxdb.Task) error {
@@ -807,14 +811,20 @@ func (s *Service) updateTask(ctx context.Context, tx Tx, id influxdb.ID, upd inf
 		return nil, influxdb.ErrUnexpectedTaskBucketErr(err)
 	}
 
-	return task, s.audit.Log(resource.Change{
+	uid, _ := icontext.GetUserID(ctx)
+	if err := s.audit.Log(resource.Change{
 		Type:           resource.Update,
-		ResourceID:     task.ID.String(),
-		ResourceType:   taskResource,
-		OrganizationID: task.OrganizationID.String(),
+		ResourceID:     task.ID,
+		ResourceType:   influxdb.TasksResourceType,
+		OrganizationID: task.OrganizationID,
+		UserID:         uid,
 		ResourceBody:   taskBytes,
 		Time:           time.Now(),
-	})
+	}); err != nil {
+		return nil, err
+	}
+
+	return task, nil
 }
 
 // DeleteTask removes a task by ID and purges all associated data and scheduled runs.
@@ -907,11 +917,13 @@ func (s *Service) deleteTask(ctx context.Context, tx Tx, id influxdb.ID) error {
 		s.log.Info("Error deleting user resource mapping for task", zap.Stringer("taskID", task.ID), zap.Error(err))
 	}
 
+	uid, _ := icontext.GetUserID(ctx)
 	return s.audit.Log(resource.Change{
 		Type:           resource.Delete,
-		ResourceID:     task.ID.String(),
-		ResourceType:   taskResource,
-		OrganizationID: task.OrganizationID.String(),
+		ResourceID:     task.ID,
+		ResourceType:   influxdb.TasksResourceType,
+		OrganizationID: task.OrganizationID,
+		UserID:         uid,
 		Time:           time.Now(),
 	})
 }

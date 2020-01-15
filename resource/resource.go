@@ -21,14 +21,16 @@ type Change struct {
 	// Type of change.
 	Type ChangeType
 	// ResourceID of the changed resource.
-	ResourceID string
+	ResourceID influxdb.ID
 	// ResourceType that was changed.
 	ResourceType influxdb.ResourceType
 	// OrganizationID of the organization owning the changed resource.
-	OrganizationID string
+	OrganizationID influxdb.ID
+	// UserID of the user changing the resource.
+	UserID influxdb.ID
 	// ResourceBody after the change.
 	ResourceBody []byte
-	// Time when the change was completed.
+	// Time when the resource was changed.
 	Time time.Time
 }
 
@@ -38,6 +40,8 @@ type ChangeType string
 const (
 	// Create a resource.
 	Create ChangeType = "create"
+	// Put a resource.
+	Put = "put"
 	// Update a resource.
 	Update = "update"
 	// Delete a resource
