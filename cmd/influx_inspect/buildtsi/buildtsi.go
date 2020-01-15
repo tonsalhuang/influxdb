@@ -84,11 +84,11 @@ func (cmd *Command) Run(args ...string) error {
 func (cmd *Command) run(dataDir, walDir string) error {
 	// Verify the user actually wants to run as root.
 	if isRoot() {
-		fmt.Println("You are currently running as root. This will build your")
-		fmt.Println("index files with root ownership and will be inaccessible")
-		fmt.Println("if you run influxd as a non-root user. You should run")
-		fmt.Println("buildtsi as the same user you are running influxd.")
-		fmt.Print("Are you sure you want to continue? (y/N): ")
+		fmt.Fprintln(cmd.Stdout, "You are currently running as root. This will build your")
+		fmt.Fprintln(cmd.Stdout, "index files with root ownership and will be inaccessible")
+		fmt.Fprintln(cmd.Stdout, "if you run influxd as a non-root user. You should run")
+		fmt.Fprintln(cmd.Stdout, "buildtsi as the same user you are running influxd.")
+		fmt.Fprint(cmd.Stdout, "Are you sure you want to continue? (y/N): ")
 		var answer string
 		if fmt.Scanln(&answer); !strings.HasPrefix(strings.TrimSpace(strings.ToLower(answer)), "y") {
 			return fmt.Errorf("operation aborted")
@@ -173,7 +173,7 @@ func (cmd *Command) compactDatabaseSeriesFile(dbName, path string) error {
 		if err = compactor.Compact(partition); err != nil {
 			return err
 		}
-		fmt.Println("compacted ", partition.Path())
+		fmt.Fprintln(cmd.Stdout, "compacted ", partition.Path())
 	}
 	return nil
 }
@@ -181,7 +181,7 @@ func (cmd *Command) compactDatabaseSeriesFile(dbName, path string) error {
 func (cmd *Command) compactSeriesFilePartition(path string) error {
 	const tmpExt = ".tmp"
 
-	fmt.Printf("processing partition for %q\n", path)
+	fmt.Fprintf(cmd.Stdout, "processing partition for %q\n", path)
 	fis, err := ioutil.ReadDir(path)
 	if err != nil {
 		return err
@@ -201,7 +201,7 @@ func (cmd *Command) compactSeriesFilePartition(path string) error {
 		}
 
 		segmentPath := filepath.Join(path, fi.Name())
-		fmt.Printf("processing segment %q %d\n", path, segmentID)
+		fmt.Fprintf(cmd.Stdout, "processing segment %q %d\n", path, segmentID)
 
 		segment := tsdb.NewSeriesSegment(segmentID, path)
 		if err = segment.Open(); err != nil {
@@ -218,14 +218,14 @@ func (cmd *Command) compactSeriesFilePartition(path string) error {
 		dst := filepath.Join(path, fi.Name())
 		src := dst + tmpExt
 
-		fmt.Printf("renaming new segment %q to %q\n", src, dst)
+		fmt.Fprintf(cmd.Stdout, "renaming new segment %q to %q\n", src, dst)
 		if err = file.RenameFile(src, dst); err != nil && !os.IsNotExist(err) {
 			return fmt.Errorf("serious failure. Please rebuild index and series file: %v", err)
 		}
 	}
 
 	// Remove index file and then rebuild index
-	fmt.Println("removing index file", indexPath)
+	fmt.Fprintln(cmd.Stdout, "removing index file", indexPath)
 	if err = os.Remove(indexPath); err != nil && !os.IsNotExist(err) { // index won't exist for low cardinality
 		return err
 	}
