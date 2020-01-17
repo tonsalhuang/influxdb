@@ -297,7 +297,14 @@ func (s *SeriesSegment) CompactToPath(path string, index *SeriesIndex) error {
 		return err
 	}
 
-	return dst.Close()
+	// Close the segment and truncate it to its maximum size.
+	size := dst.size
+	if err := dst.Close(); err != nil {
+		return err
+	} else if err := os.Truncate(dst.path, int64(size)); err != nil {
+		return err
+	}
+	return nil
 }
 
 // CloneSeriesSegments returns a copy of a slice of segments.

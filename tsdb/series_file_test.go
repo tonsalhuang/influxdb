@@ -175,6 +175,86 @@ func TestSeriesFile_DeleteSeriesID(t *testing.T) {
 	}
 }
 
+func TestSeriesFile_Compaction(t *testing.T) {
+	sfile := MustOpenSeriesFile()
+	defer sfile.Close()
+
+	// Generate a bunch of keys.
+	var mms [][]byte
+	var tagSets []models.Tags
+	for i := 0; i < 1000; i++ {
+		mms = append(mms, []byte("cpu"))
+		tagSets = append(tagSets, models.NewTags(map[string]string{"region": fmt.Sprintf("r%d", i)}))
+	}
+
+	// Add all to the series file.
+	ids, err := sfile.CreateSeriesListIfNotExists(mms, tagSets)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Delete a subset of keys.
+	for i, id := range ids {
+		if i%10 == 0 {
+			if err := sfile.DeleteSeriesID(id); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+
+	// Compute total size of all series data.
+	origSize, err := sfile.FileSize()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Compact all segments.
+	var paths []string
+	for _, p := range sfile.Partitions() {
+		for _, ss := range p.Segments() {
+			if err := ss.CompactToPath(ss.Path()+".tmp", p.Index()); err != nil {
+				t.Fatal(err)
+			}
+			paths = append(paths, ss.Path())
+		}
+	}
+
+	// Close index.
+	if err := sfile.SeriesFile.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Overwrite files.
+	for _, path := range paths {
+		if err := os.Rename(path+".tmp", path); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Reopen index.
+	sfile.SeriesFile = tsdb.NewSeriesFile(sfile.SeriesFile.Path())
+	if err := sfile.SeriesFile.Open(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Ensure series status is correct.
+	for i, id := range ids {
+		if got, want := sfile.IsDeleted(id), (i%10) == 0; got != want {
+			t.Fatalf("IsDeleted(%d)=%v, want %v", id, got, want)
+		}
+	}
+
+	// Verify new size is smaller.
+	newSize, err := sfile.FileSize()
+	if err != nil {
+		t.Fatal(err)
+	} else if newSize >= origSize {
+		t.Fatalf("expected new size (%d) to be smaller than original size (%d)", newSize, origSize)
+	}
+
+	t.Logf("original size: %d, new size: %d", origSize, newSize)
+}
+
 var cachedCompactionSeriesFile *SeriesFile
 
 func BenchmarkSeriesFile_Compaction(b *testing.B) {
