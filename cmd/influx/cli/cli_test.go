@@ -56,6 +56,27 @@ func TestRunCLI_ExecuteInsert(t *testing.T) {
 	}
 }
 
+func TestRunCLI_ExecuteInsertWithPath(t *testing.T) {
+	path := "boom"
+	t.Parallel()
+	ts := emptyTestServerWithPath(path)
+	defer ts.Close()
+
+	u, _ := url.Parse(ts.URL)
+	h, p, _ := net.SplitHostPort(u.Host)
+	c := cli.New(CLIENT_VERSION)
+	c.Host = h
+	c.Path = path
+	c.Port, _ = strconv.Atoi(p)
+	c.ClientConfig.Precision = "ms"
+	c.Execute = "INSERT sensor,floor=1 value=2"
+	c.IgnoreSignals = true
+	c.ForceTTY = true
+	if err := c.Run(); err != nil {
+		t.Fatalf("Run failed with error: %s", err)
+	}
+}
+
 func TestRunCLI_ExecuteInsert_WithSignals(t *testing.T) {
 	t.Parallel()
 	ts := emptyTestServer()
@@ -591,9 +612,7 @@ func TestParseCommand_HistoryWithBlankCommand(t *testing.T) {
 	}
 }
 
-// helper methods
-
-func emptyTestServer() *httptest.Server {
+func emptyTestServerWithPath(path string) *httptest.Server {
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Influxdb-Version", SERVER_VERSION)
 
@@ -606,7 +625,7 @@ func emptyTestServer() *httptest.Server {
 		}
 
 		switch r.URL.Path {
-		case "/query":
+		case fmt.Sprintf("%s/query", path):
 			values := r.URL.Query()
 			parser := influxql.NewParser(bytes.NewBufferString(values.Get("q")))
 			q, err := parser.ParseQuery()
@@ -627,8 +646,14 @@ func emptyTestServer() *httptest.Server {
 			case *influxql.ShowDiagnosticsStatement:
 				io.WriteString(w, `{"results":[{}]}`)
 			}
-		case "/write":
+		case fmt.Sprintf("%s/write", path):
 			w.WriteHeader(http.StatusOK)
 		}
 	}))
+}
+
+// helper methods
+
+func emptyTestServer() *httptest.Server {
+	return emptyTestServerWithPath("")
 }
