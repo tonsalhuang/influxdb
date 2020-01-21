@@ -297,9 +297,7 @@ func (s *Service) createOrganization(ctx context.Context, tx Tx, o *influxdb.Org
 
 	v, err := json.Marshal(o)
 	if err != nil {
-		return &influxdb.Error{
-			Err: err,
-		}
+		return influxdb.ErrInternalOrgServiceError(influxdb.OpCreateOrganization, err)
 	}
 	if err := s.putOrganization(ctx, tx, o, v); err != nil {
 		return &influxdb.Error{
@@ -328,9 +326,7 @@ func (s *Service) PutOrganization(ctx context.Context, o *influxdb.Organization)
 	return s.kv.Update(ctx, func(tx Tx) error {
 		v, err := json.Marshal(o)
 		if err != nil {
-			return &influxdb.Error{
-				Err: err,
-			}
+			return influxdb.ErrInternalOrgServiceError(influxdb.OpPutOrganization, err)
 		}
 
 		if err := s.putOrganization(ctx, tx, o, v); err != nil {
@@ -482,9 +478,7 @@ func (s *Service) updateOrganization(ctx context.Context, tx Tx, id influxdb.ID,
 
 	v, err := json.Marshal(o)
 	if err != nil {
-		return nil, &influxdb.Error{
-			Err: err,
-		}
+		return nil, influxdb.ErrInternalOrgServiceError(influxdb.OpUpdateOrganization, err)
 	}
 	if pe := s.putOrganization(ctx, tx, o, v); pe != nil {
 		return nil, pe

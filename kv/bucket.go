@@ -481,9 +481,7 @@ func (s *Service) createBucket(ctx context.Context, tx Tx, b *influxdb.Bucket) (
 
 	v, err := json.Marshal(b)
 	if err != nil {
-		return &influxdb.Error{
-			Err: err,
-		}
+		return influxdb.ErrInternalBucketServiceError(influxdb.OpCreateBucket, err)
 	}
 	if err := s.putBucket(ctx, tx, b, v); err != nil {
 		return err
@@ -514,9 +512,7 @@ func (s *Service) PutBucket(ctx context.Context, b *influxdb.Bucket) error {
 	return s.kv.Update(ctx, func(tx Tx) error {
 		v, err := json.Marshal(b)
 		if err != nil {
-			return &influxdb.Error{
-				Err: err,
-			}
+			return influxdb.ErrInternalBucketServiceError(influxdb.OpPutBucket, err)
 		}
 
 		if err := s.putBucket(ctx, tx, b, v); err != nil {
@@ -722,9 +718,7 @@ func (s *Service) updateBucket(ctx context.Context, tx Tx, id influxdb.ID, upd i
 
 	v, err := json.Marshal(b)
 	if err != nil {
-		return nil, &influxdb.Error{
-			Err: err,
-		}
+		return nil, influxdb.ErrInternalBucketServiceError(influxdb.OpUpdateBucket, err)
 	}
 
 	if err := s.putBucket(ctx, tx, b, v); err != nil {
